@@ -1,2 +1,2 @@
-# hello-world
-Hello world new project template.
+# cocos-nrf
+A bluetooth device tools developed by cocos creator.
