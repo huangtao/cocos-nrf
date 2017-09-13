@@ -9,9 +9,10 @@ cc.Class({
     onLoad: function () {
     },
 
-    init: function () {
+    init: function (callback) {
+        this._callback_ui = callback;
         this.ios_api = 'AppController';
-        this.android_api = 'org/tao/mjhz/Weixin';
+        this.android_api = 'org/cocos2dx/javascript/AppActivity';
         if (!cc.sys.isNative) {
             return;
         }
@@ -19,33 +20,31 @@ cc.Class({
 
     scan: function () {
         if (cc.sys.os == cc.sys.OS_IOS) {
-            jsb.reflection.callStaticMethod(this.ios_api, 'login');
+            jsb.reflection.callStaticMethod(this.ios_api, 'scan');
         } else if (cc.sys.os == cc.sys.OS_ANDROID) {
-            jsb.reflection.callStaticMethod(this.android_api, 'login', '()V');
+            jsb.reflection.callStaticMethod(this.android_api, 'scan', '()V');
         } else {
-            console.log('platform:' + cc.sys.os + "don't implement login.");
+            console.log('platform:' + cc.sys.os + "don't implement scan.");
         }
     },
 
-    onScanResp: function (code) {
-        cc.log('onLoginResp called code=', code);
-        var data = {
-            code: code,
-            bundleId: cc.tao.config.bundleId
-        };
-        cc.tao.net.sendXHR('/auth_wechat', data, function (ret) {
-            if (ret.retCode == 0) {
-                cc.sys.localStorage.setItem('wx_account', ret.account);
-                cc.sys.localStorage.setItem('wx_sign', ret.sign);
-            }
-            cc.tao.net.onAuth(ret);
-        });
+    onScanResp: function (device) {
+        cc.log('onScanResp called device=', device);
+        if (typeof(device) !== 'string') {
+            return;
+        }
+        let ary = device.split(',');
+        if (ary.length < 3) {
+            return;
+        }
+        let name = ary[0];
+        let id = ary[1];
+        let rssi = ary[2];
         if (this._callback_ui) {
-            this._callback_ui.showWaiting(true, '正在登陆服务器...');
+            this._callback_ui.addDeviceItem(name, id, rssi);
         }
     },
 
     connect: function (id) {
-
     },
 });

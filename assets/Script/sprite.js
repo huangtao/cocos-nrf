@@ -28,17 +28,12 @@ cc.Class({
         }
         let NativeHelper = require('NativeHelper');
         cc.tao.native = new NativeHelper();
-        cc.tao.native.init();
+        cc.tao.native.init(this);
     },
 
     initialize: function () {
         for (let i = 0; i < this.spawnCount; ++i) {
-            this.addDeviceItem(i.toString(), 'kkk', 'kkk');
-            // let item = cc.instantiate(this.itemTemplate);
-            // this.content.addChild(item);
-            // item.setPosition(0, -item.height * (0.5 + i) - this.spacing * (i + 1));
-            // item.getComponent('Item').updateItem(i, i);
-            // this.items.push(item);
+            this.addDeviceItem(i.toString(), 'test', 'test');
         }
     },
 
@@ -60,6 +55,15 @@ cc.Class({
 
     // 加入扫描到的蓝牙设备
     addDeviceItem: function (name, id, rssi) {
+        let listnode = cc.find('rect/list', this.scanUI);
+        if (listnode == null) {
+            return;
+        }
+        if (listnode.active == false) {
+            listnode.active = true;
+            let tip = cc.find('rect/tip', this.scanUI);
+            tip.active = false;
+        }
         let item = cc.instantiate(this.deviceItem);
         item.width = this.content.width;
         item.setPosition(0, 

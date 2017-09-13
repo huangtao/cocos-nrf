@@ -858,7 +858,7 @@
       "__id__": 52
     },
     "spacing": 0,
-    "spawnCount": 20,
+    "spawnCount": 0,
     "_scaning": false,
     "_totalDevice": 0
   },
@@ -1701,7 +1701,7 @@
   },
   {
     "__type__": "cc.Node",
-    "_name": "New Label",
+    "_name": "tip",
     "_objFlags": 0,
     "_parent": {
       "__id__": 28
