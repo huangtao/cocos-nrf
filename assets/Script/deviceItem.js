@@ -30,6 +30,10 @@ cc.Class({
         return this.labelId.string;
     },
 
+    connect: function() {
+        cc.tao.native.connect(this.labelId.string);
+    },
+
     // called every frame, uncomment this function to activate update callback
     // update: function (dt) {
 

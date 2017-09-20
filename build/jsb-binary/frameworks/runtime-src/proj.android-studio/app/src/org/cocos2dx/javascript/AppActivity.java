@@ -34,9 +34,14 @@ import org.cocos2dx.lib.Cocos2dxHelper;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
+import android.content.BroadcastReceiver;
+import android.content.ComponentName;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
+import android.os.Build;
 import android.os.Bundle;
 import org.cocos2dx.javascript.SDKWrapper;
+import org.cocos2dx.javascript.UartService;
 import android.app.AlertDialog;
 import android.app.AlertDialog.Builder;
 import android.content.DialogInterface;
@@ -44,10 +49,16 @@ import android.content.DialogInterface;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.os.IBinder;
+import android.support.v4.content.LocalBroadcastManager;
 import android.util.Log;
+import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.UnsupportedEncodingException;
+import java.text.DateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,16 +72,21 @@ public class AppActivity extends Cocos2dxActivity {
     private static final int REQUEST_SELECT_DEVICE = 1;
     private static final int REQUEST_ENABLE_BT = 2;
     private static final int REQUEST_SELECT_FILE = 3;
+    private static final int UART_PROFILE_CONNECTED = 20;
+    private static final int UART_PROFILE_DISCONNECTED = 21;
 
     private static boolean device_ok = true;
 
     static List<BluetoothDevice> deviceList;
     static Map<String, Integer> devRssiValues;
 
-    private static BluetoothAdapter mBtAdapter = null;
-    private static BluetoothAdapter mBluetoothAdapter;
+    private static int mState = UART_PROFILE_DISCONNECTED;
+    private static UartService mService = null;
+    private static BluetoothDevice mDevice = null;
+    private static BluetoothAdapter mBluetoothAdapter = null;
 
     private static boolean mScanning;
+    private static String mDeviceRespMsg;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -78,23 +94,24 @@ public class AppActivity extends Cocos2dxActivity {
         app = this;
         SDKWrapper.getInstance().init(this);
 
-        mBtAdapter = BluetoothAdapter.getDefaultAdapter();
-        if (mBtAdapter == null) {
-            Toast.makeText(this, "Bluetooth is not available", Toast.LENGTH_LONG).show();
-            device_ok = false;
-        }
-        // Initializes a Bluetooth adapter.  For API level 18 and above, get a reference to
-        // BluetoothAdapter through BluetoothManager.
-        final BluetoothManager bluetoothManager =
-                (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
-        mBluetoothAdapter = bluetoothManager.getAdapter();
         // Checks if Bluetooth is supported on the device.
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        } else {
+            // Initializes a Bluetooth adapter.  For API level 18 and above, get a reference to
+            // BluetoothAdapter through BluetoothManager.
+            final BluetoothManager bluetoothManager =
+                    (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+            mBluetoothAdapter = bluetoothManager.getAdapter();
+        }
         if (mBluetoothAdapter == null) {
             Toast.makeText(this, "Bluetooth is not supported", Toast.LENGTH_SHORT).show();
             device_ok = false;
         }
         deviceList = new ArrayList<BluetoothDevice>();
         devRssiValues = new HashMap<String, Integer>();
+
+        service_init();
     }
 
     @Override
@@ -133,10 +150,27 @@ public class AppActivity extends Cocos2dxActivity {
         });
     }
 
+    private void service_init() {
+        Intent bindIntent = new Intent(this, UartService.class);
+        bindService(bindIntent, mServiceConnection, Context.BIND_AUTO_CREATE);
+
+        LocalBroadcastManager.getInstance(this).registerReceiver(
+                UARTStatusChangeReceiver, makeGattUpdateIntentFilter());
+    }
+    private static IntentFilter makeGattUpdateIntentFilter() {
+        final IntentFilter intentFilter = new IntentFilter();
+        intentFilter.addAction(UartService.ACTION_GATT_CONNECTED);
+        intentFilter.addAction(UartService.ACTION_GATT_DISCONNECTED);
+        intentFilter.addAction(UartService.ACTION_GATT_SERVICES_DISCOVERED);
+        intentFilter.addAction(UartService.ACTION_DATA_AVAILABLE);
+        intentFilter.addAction(UartService.DEVICE_DOES_NOT_SUPPORT_UART);
+        return intentFilter;
+    }
+
     public static void scan() {
         Log.i(TAG, "call scan.");
 
-        if (!mBtAdapter.isEnabled()) {
+        if (!mBluetoothAdapter.isEnabled()) {
             Log.i(TAG, "onClick - BT not enabled yet");
             Intent enableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
             app.startActivityForResult(enableIntent, REQUEST_ENABLE_BT);
@@ -146,6 +180,150 @@ public class AppActivity extends Cocos2dxActivity {
             mBluetoothAdapter.startLeScan(app.mLeScanCallback);
         }
     }
+
+    public static void connect(String address) {
+        Log.i(TAG, "call connect:" + address);
+        if (address.length() == 0) {
+            return;
+        }
+        mBluetoothAdapter.stopLeScan(app.mLeScanCallback);
+        mDevice = BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address);
+        mService.connect(address);
+    }
+
+    public static void disconnect() {
+        Log.i(TAG, "call disconnect.");
+        if (mDevice != null) {
+            mService.disconnect();
+        }
+    }
+
+    public static void send(String message) {
+        byte[] value;
+        try {
+            //send data to service
+            value = message.getBytes("UTF-8");
+            mService.writeRXCharacteristic(value);
+        } catch (UnsupportedEncodingException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+    }
+
+    public static String bytesToHex(byte[] in) {
+        final StringBuilder builder = new StringBuilder();
+        for (byte b : in) {
+            builder.append(String.format("%02x", b));
+        }
+        return builder.toString();
+    }
+
+    //UART service connected/disconnected
+    private ServiceConnection mServiceConnection = new ServiceConnection() {
+        public void onServiceConnected(ComponentName className, IBinder rawBinder) {
+            mService = ((UartService.LocalBinder) rawBinder).getService();
+            Log.d(TAG, "onServiceConnected mService= " + mService);
+            if (!mService.initialize()) {
+                Log.e(TAG, "Unable to initialize Bluetooth");
+                finish();
+            }
+        }
+
+        public void onServiceDisconnected(ComponentName classname) {
+            ////     mService.disconnect(mDevice);
+            mService = null;
+        }
+    };
+
+
+    private final BroadcastReceiver UARTStatusChangeReceiver = new BroadcastReceiver() {
+
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+
+            final Intent mIntent = intent;
+            //*********************//
+            if (action.equals(UartService.ACTION_GATT_CONNECTED)) {
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        String currentDateTimeString = DateFormat.getTimeInstance().format(new Date());
+                        Log.d(TAG, "UART_CONNECT_MSG");
+                        mState = UART_PROFILE_CONNECTED;
+                    }
+                });
+                Cocos2dxHelper.runOnGLThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        String callstr = "cc.tao.native.onDeviceConnect('" +
+                                mDevice.getName() + "')";
+                        Log.i(TAG, "javascript call:" + callstr);
+                        Cocos2dxJavascriptJavaBridge.evalString(callstr);
+                    }
+                });
+            }
+
+            //*********************//
+            if (action.equals(UartService.ACTION_GATT_DISCONNECTED)) {
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        String currentDateTimeString = DateFormat.getTimeInstance().format(new Date());
+                        Log.d(TAG, "UART_DISCONNECT_MSG");
+                        mState = UART_PROFILE_DISCONNECTED;
+                        mService.close();
+                        //setUiState();
+                    }
+                });
+                Cocos2dxHelper.runOnGLThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        String callstr = "cc.tao.native.onDeviceDisconnect()";
+                        Log.i(TAG, "javascript call:" + callstr);
+                        Cocos2dxJavascriptJavaBridge.evalString(callstr);
+                    }
+                });
+            }
+
+
+            //*********************//
+            if (action.equals(UartService.ACTION_GATT_SERVICES_DISCOVERED)) {
+                mService.enableTXNotification();
+            }
+            //*********************//
+            if (action.equals(UartService.ACTION_DATA_AVAILABLE)) {
+
+                final byte[] txValue = intent.getByteArrayExtra(UartService.EXTRA_DATA);
+//                runOnUiThread(new Runnable() {
+//                    public void run() {
+//                        try {
+//                            String text = new String(txValue, "UTF-8");
+//                            String currentDateTimeString = DateFormat.getTimeInstance().format(new Date());
+//                        } catch (Exception e) {
+//                            Log.e(TAG, e.toString());
+//                        }
+//                    }
+//                });
+                // receive device message, notify ui
+                try {
+                    mDeviceRespMsg = bytesToHex(txValue);
+                    Cocos2dxHelper.runOnGLThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            String callstr = "cc.tao.native.onDeviceMsg('" + mDeviceRespMsg + "')";
+                            Log.i(TAG, "javascript call:" + callstr);
+                            Cocos2dxJavascriptJavaBridge.evalString(callstr);
+                        }
+                    });
+                } catch (Exception e) {
+                    Log.e(TAG, e.toString());
+                }
+            }
+            //*********************//
+            if (action.equals(UartService.DEVICE_DOES_NOT_SUPPORT_UART)){
+                Log.i(TAG, "Device doesn't support UART. Disconnecting");
+                mService.disconnect();
+            }
+        }
+    };
 
     private BluetoothAdapter.LeScanCallback mLeScanCallback =
             new BluetoothAdapter.LeScanCallback() {
@@ -187,6 +365,11 @@ public class AppActivity extends Cocos2dxActivity {
     protected void onResume() {
         super.onResume();
         SDKWrapper.getInstance().onResume();
+        if (!mBluetoothAdapter.isEnabled()) {
+            Log.i(TAG, "onResume - BT not enabled yet");
+            Intent enableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+            startActivityForResult(enableIntent, REQUEST_ENABLE_BT);
+        }
     }
 
     @Override
@@ -199,6 +382,15 @@ public class AppActivity extends Cocos2dxActivity {
     protected void onDestroy() {
         super.onDestroy();
         SDKWrapper.getInstance().onDestroy();
+
+        try {
+            LocalBroadcastManager.getInstance(this).unregisterReceiver(UARTStatusChangeReceiver);
+        } catch (Exception ignore) {
+            Log.e(TAG, ignore.toString());
+        }
+        unbindService(mServiceConnection);
+        mService.stopSelf();
+        mService= null;
     }
 
     @Override
